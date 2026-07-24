@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { deserializeTemplate, serializeTemplate } from './storage';
-import { resultToCsv, resultToJson, safeFileName } from './download';
+import { resultToCsv, resultsToJson, safeFileName } from './download';
 import { ANY_SHEET, type ExtractionResult, type Template } from './types';
 
 const template: Template = {
@@ -103,13 +103,23 @@ const result: ExtractionResult = {
 
 describe('exports', () => {
   it('shapes JSON by output type and keeps failures visible', () => {
-    const json = JSON.parse(resultToJson(result));
+    const json = JSON.parse(resultsToJson([result]));
 
-    expect(json.data['Line items']).toEqual([
+    expect(json.files[0].data['Line items']).toEqual([
       { SKU: 'A-1001', Description: 'Widget, "standard"', Qty: 12 },
     ]);
-    expect(json.data.Total).toBe(231.66);
-    expect(json.data.Missing).toEqual({ error: 'Anchor not found' });
+    expect(json.files[0].data.Total).toBe(231.66);
+    expect(json.files[0].data.Missing).toEqual({ error: 'Anchor not found' });
+  });
+
+  it('always nests under files, so one file and many share a shape', () => {
+    const one = JSON.parse(resultsToJson([result]));
+    const two = JSON.parse(resultsToJson([result, { ...result, fileName: 'b.xlsx' }]));
+
+    expect(one.files).toHaveLength(1);
+    expect(two.files).toHaveLength(2);
+    expect(two.files.map((f: { file: string }) => f.file)).toEqual(['invoice.xlsx', 'b.xlsx']);
+    expect(two.template).toBe('Invoice extract');
   });
 
   it('escapes quotes and commas in CSV', () => {

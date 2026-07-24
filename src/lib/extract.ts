@@ -203,6 +203,17 @@ export function applyTemplate(wb: WorkbookData, template: Template): ExtractionR
   };
 }
 
+export function applyTemplateToAll(
+  workbooks: WorkbookData[],
+  template: Template,
+): ExtractionResult[] {
+  return workbooks.map((wb) => applyTemplate(wb, template));
+}
+
+export function failedFieldCount(result: ExtractionResult): number {
+  return result.fields.filter((f) => !f.ok).length;
+}
+
 /** Human-readable summary of where a selector points, for the fields list. */
 export function describeSelector(selector: Selector): string {
   if (selector.kind === 'fixed') return qualifyRange(selector.sheet, selector.range);

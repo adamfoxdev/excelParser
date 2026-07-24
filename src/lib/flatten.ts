@@ -1,11 +1,10 @@
 import type { CellValue, ExtractionResult, FieldResult } from './types';
 
+export const FILE_COLUMN = 'File';
+
 export interface FlatTable {
   headers: string[];
-  /**
-   * One row per extraction. Kept as a matrix rather than a single row so several
-   * files can be stacked into one table later without reshaping anything.
-   */
+  /** One row per extracted file. */
   rows: CellValue[][];
 }
 
@@ -34,11 +33,27 @@ export function flattenFieldValue(field: FieldResult): CellValue {
   return JSON.stringify(data);
 }
 
-export function flattenResult(result: ExtractionResult): FlatTable {
+/**
+ * One row per file, one column per template field, prefixed with the file name.
+ *
+ * Columns come from the first result rather than the union of all of them: every
+ * file in a batch is extracted with the same template, so the field list is
+ * identical across results and the table stays rectangular.
+ */
+export function flattenResults(results: ExtractionResult[]): FlatTable {
+  const headers = [FILE_COLUMN, ...(results[0]?.fields ?? []).map((f) => f.fieldName)];
+
   return {
-    headers: result.fields.map((f) => f.fieldName),
-    rows: [result.fields.map(flattenFieldValue)],
+    headers,
+    rows: results.map((result) => [
+      result.fileName,
+      ...result.fields.map(flattenFieldValue),
+    ]),
   };
+}
+
+export function flattenResult(result: ExtractionResult): FlatTable {
+  return flattenResults([result]);
 }
 
 /** True when a cell holds an embedded JSON document rather than a plain value. */

@@ -399,6 +399,75 @@ body {
 
 /* ----------------------------------- grid ---------------------------------- */
 
+.file-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.file-bar-count {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.file-bar-clear {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.file-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 4px 2px 2px;
+  flex-shrink: 0;
+}
+
+.file-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.file-chip.has-error {
+  border-color: rgba(242, 109, 109, 0.5);
+}
+
+.file-chip.is-unreadable {
+  border-color: rgba(242, 109, 109, 0.5);
+  opacity: 0.75;
+}
+
+.file-chip-name {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 3px 6px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sheet-tabs {
   display: flex;
   gap: 4px;
@@ -703,6 +772,20 @@ body {
   font-size: 11px;
   color: #9ecbff;
   max-width: 320px;
+}
+
+.result-table th.is-file,
+.result-table td.is-file {
+  position: sticky;
+  left: 0;
+  background: var(--panel);
+  font-weight: 500;
+  max-width: 180px;
+  z-index: 1;
+}
+
+.result-table th.is-file {
+  z-index: 2;
 }
 
 .result-table td.is-failed {

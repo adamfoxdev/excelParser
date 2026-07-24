@@ -1,5 +1,5 @@
 import type { CellValue, ExtractionResult, FieldResult } from './types';
-import { flattenResult } from './flatten';
+import { flattenResults } from './flatten';
 
 export function downloadFile(name: string, contents: string, mime: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type: mime }));
@@ -34,18 +34,18 @@ export function resultToCsv(result: ExtractionResult): string {
 }
 
 /**
- * One header row and one data row: every field becomes a column, and fields
+ * One header row then one row per file: every field becomes a column, and fields
  * spanning multiple rows are JSON-encoded into their single cell.
  */
-export function resultToFlatCsv(result: ExtractionResult): string {
-  const table = flattenResult(result);
+export function resultsToFlatCsv(results: ExtractionResult[]): string {
+  const table = flattenResults(results);
   return [table.headers.map(csvCell), ...table.rows.map((row) => row.map(csvCell))]
     .map((row) => row.join(','))
     .join('\r\n');
 }
 
 /** Field name → rows of objects (when headers exist) or arrays. */
-export function resultToJson(result: ExtractionResult): string {
+function fieldsToObject(result: ExtractionResult): Record<string, unknown> {
   const out: Record<string, unknown> = {};
 
   for (const field of result.fields) {
@@ -68,8 +68,22 @@ export function resultToJson(result: ExtractionResult): string {
       : field.rows;
   }
 
+  return out;
+}
+
+/**
+ * Always an array of files, even for a single one — a consumer should not have
+ * to branch on how many files happened to be in the batch.
+ */
+export function resultsToJson(results: ExtractionResult[]): string {
   return JSON.stringify(
-    { file: result.fileName, template: result.templateName, data: out },
+    {
+      template: results[0]?.templateName ?? '',
+      files: results.map((result) => ({
+        file: result.fileName,
+        data: fieldsToObject(result),
+      })),
+    },
     null,
     2,
   );

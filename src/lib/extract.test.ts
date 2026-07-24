@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { applyTemplate, extractField, resolveSelector } from './extract';
+import {
+  applyTemplate,
+  applyTemplateToAll,
+  extractField,
+  failedFieldCount,
+  resolveSelector,
+} from './extract';
 import { encodeRange } from './range';
 import { ANY_SHEET, type CellValue, type Field, type SheetData, type WorkbookData } from './types';
 
@@ -16,6 +22,7 @@ function sheet(name: string, cells: CellValue[][]): SheetData {
 function invoice(padTop: number): WorkbookData {
   const pad: CellValue[][] = Array.from({ length: padTop }, () => []);
   return {
+    id: `wb-${padTop}`,
     fileName: 'invoice.xlsx',
     sheets: [
       sheet('Invoice', [
@@ -139,6 +146,7 @@ describe('anchored selectors', () => {
 
   it('distinguishes occurrences of a repeated label', () => {
     const wb: WorkbookData = {
+      id: 'wb-repeat',
       fileName: 'x.xlsx',
       sheets: [sheet('S', [['Total', 1], ['Total', 2], ['Total', 3]])],
     };
@@ -251,6 +259,67 @@ describe('output shapes', () => {
     });
 
     expect(result.headers).toEqual(['Column 1', 'Column 2', 'Column 3', 'Column 4']);
+  });
+
+  it('applies one template across a batch of files', () => {
+    const template = {
+      id: 't',
+      name: 'Invoice',
+      description: '',
+      flatten: true,
+      createdAt: 0,
+      updatedAt: 0,
+      fields: [
+        {
+          id: 'items',
+          name: 'Line items',
+          selector: {
+            kind: 'anchor',
+            sheet: 'Invoice',
+            anchorText: 'SKU',
+            matchMode: 'exact',
+            caseSensitive: false,
+            occurrence: 1,
+            offsetRows: 0,
+            offsetCols: 0,
+            height: 'auto',
+            width: 'auto',
+          },
+          headerRow: true,
+          output: 'table',
+        } satisfies Field,
+      ],
+    };
+
+    // Same template, three files with the table at different offsets.
+    const results = applyTemplateToAll([invoice(0), invoice(4), invoice(11)], template);
+
+    expect(results).toHaveLength(3);
+    expect(results.every((r) => r.fields[0].ok)).toBe(true);
+    expect(results.map((r) => r.fields[0].resolvedRange)).toEqual([
+      'Invoice!A7:D10',
+      'Invoice!A11:D14',
+      'Invoice!A18:D21',
+    ]);
+    // Different ranges, identical extracted data.
+    expect(new Set(results.map((r) => JSON.stringify(r.fields[0].rows))).size).toBe(1);
+  });
+
+  it('counts failed fields per file', () => {
+    const template = {
+      id: 't',
+      name: 'T',
+      description: '',
+      flatten: false,
+      createdAt: 0,
+      updatedAt: 0,
+      fields: [
+        tableField({ kind: 'fixed', sheet: 'Invoice', range: 'A7:D10' }),
+        { ...tableField({ kind: 'fixed', sheet: 'Ghost', range: 'A1:A1' }), id: 'x', name: 'X' },
+      ],
+    };
+
+    expect(applyTemplateToAll([invoice(0)], template).map(failedFieldCount)).toEqual([1]);
   });
 
   it('applies a whole template, isolating per-field failures', () => {

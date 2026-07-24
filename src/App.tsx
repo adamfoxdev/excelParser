@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { SheetGrid } from './components/SheetGrid';
 import { FieldEditor } from './components/FieldEditor';
 import { ResultsPanel } from './components/ResultsPanel';
-import { loadWorkbook } from './lib/workbook';
-import { applyTemplate, describeSelector, resolveSelector } from './lib/extract';
+import { FileBar } from './components/FileBar';
+import { loadWorkbooks, type LoadFailure } from './lib/workbook';
+import { applyTemplate, applyTemplateToAll, describeSelector, resolveSelector } from './lib/extract';
 import { encodeRange, type RangeRef } from './lib/range';
 import {
   deserializeTemplate,
@@ -22,7 +23,10 @@ interface Selection {
 }
 
 export default function App() {
-  const [workbook, setWorkbook] = useState<WorkbookData | null>(null);
+  const [workbooks, setWorkbooks] = useState<WorkbookData[]>([]);
+  const [activeFileId, setActiveFileId] = useState<string | null>(null);
+  const [loadFailures, setLoadFailures] = useState<LoadFailure[]>([]);
+  const [progress, setProgress] = useState<string | null>(null);
   const [activeSheet, setActiveSheet] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [template, setTemplate] = useState<Template>(emptyTemplate);
@@ -49,27 +53,91 @@ export default function App() {
     return () => clearTimeout(t);
   }, [status]);
 
+  const workbook = useMemo(
+    () => workbooks.find((w) => w.id === activeFileId) ?? null,
+    [workbooks, activeFileId],
+  );
+
   const sheet = useMemo(
     () => workbook?.sheets.find((s) => s.name === activeSheet) ?? null,
     [workbook, activeSheet],
   );
 
-  const openFile = async (file: File) => {
+  const openFiles = async (files: File[]) => {
+    if (files.length === 0) return;
     setLoading(true);
-    try {
-      const wb = await loadWorkbook(file);
-      setWorkbook(wb);
-      setActiveSheet(wb.sheets[0].name);
-      setSelection(null);
-      setStatus({ text: `Loaded ${file.name} — ${wb.sheets.length} sheet(s)`, tone: 'ok' });
-    } catch (err) {
+    setProgress(files.length > 1 ? `Reading 1 of ${files.length}…` : null);
+
+    const { loaded, failed } = await loadWorkbooks(files, (done, total, fileName) => {
+      if (total > 1 && done < total) setProgress(`Reading ${done + 1} of ${total} — ${fileName}`);
+    });
+
+    setProgress(null);
+    setLoading(false);
+    setLoadFailures((prev) => [...prev.filter((f) => !failed.some((n) => n.fileName === f.fileName)), ...failed]);
+
+    if (loaded.length === 0) {
       setStatus({
-        text: `Could not read that file: ${err instanceof Error ? err.message : String(err)}`,
+        text:
+          failed.length === 1
+            ? `Could not read ${failed[0].fileName}: ${failed[0].error}`
+            : `None of those ${failed.length} files could be read.`,
         tone: 'error',
       });
-    } finally {
-      setLoading(false);
+      return;
     }
+
+    // Keep the file already in the grid; only jump to a new one on a fresh start.
+    setWorkbooks((prev) => {
+      const next = [...prev, ...loaded];
+      if (prev.length === 0) {
+        setActiveFileId(loaded[0].id);
+        setActiveSheet(loaded[0].sheets[0].name);
+        setSelection(null);
+      }
+      return next;
+    });
+
+    const loadedText =
+      loaded.length === 1
+        ? `Loaded ${loaded[0].fileName} — ${loaded[0].sheets.length} sheet(s)`
+        : `Loaded ${loaded.length} files`;
+
+    setStatus({
+      text: failed.length ? `${loadedText} · ${failed.length} unreadable` : loadedText,
+      tone: failed.length ? 'error' : 'ok',
+    });
+  };
+
+  const removeFile = (id: string) => {
+    setWorkbooks((prev) => {
+      const next = prev.filter((w) => w.id !== id);
+      if (id === activeFileId) {
+        const fallback = next[0] ?? null;
+        setActiveFileId(fallback?.id ?? null);
+        setActiveSheet(fallback?.sheets[0].name ?? '');
+        setSelection(null);
+      }
+      return next;
+    });
+  };
+
+  const selectFile = (id: string) => {
+    const wb = workbooks.find((w) => w.id === id);
+    if (!wb) return;
+    setActiveFileId(id);
+    // Stay on the same sheet name across files where it exists — templates are
+    // usually built against a consistent sheet.
+    if (!wb.sheets.some((s) => s.name === activeSheet)) setActiveSheet(wb.sheets[0].name);
+    setSelection(null);
+  };
+
+  const clearFiles = () => {
+    setWorkbooks([]);
+    setActiveFileId(null);
+    setActiveSheet('');
+    setSelection(null);
+    setLoadFailures([]);
   };
 
   const touch = (fields: Field[]) => setTemplate((t) => ({ ...t, fields, updatedAt: Date.now() }));
@@ -140,9 +208,23 @@ export default function App() {
     }
   };
 
+  // The active file re-extracts immediately so the grid and by-field view track
+  // edits. The whole batch is deferred: re-running every file on each keystroke
+  // in the field editor would make typing crawl once a few workbooks are open.
   const result = useMemo(
     () => (workbook ? applyTemplate(workbook, template) : null),
     [workbook, template],
+  );
+
+  const deferredTemplate = useDeferredValue(template);
+  const batchResults = useMemo(
+    () => applyTemplateToAll(workbooks, deferredTemplate),
+    [workbooks, deferredTemplate],
+  );
+
+  const resultsById = useMemo(
+    () => new Map(workbooks.map((wb, i) => [wb.id, batchResults[i]])),
+    [workbooks, batchResults],
   );
 
   const activeField = template.fields.find((f) => f.id === activeFieldId) ?? null;
@@ -174,17 +256,21 @@ export default function App() {
             ref={fileInput}
             type="file"
             accept=".xlsx,.xlsm,.xls,.csv,.tsv"
+            multiple
             hidden
             onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void openFile(f);
+              void openFiles([...(e.target.files ?? [])]);
               e.target.value = '';
             }}
           />
           <button className="btn" onClick={() => fileInput.current?.click()} disabled={loading}>
-            {loading ? 'Reading…' : workbook ? 'Open another file' : 'Open workbook'}
+            {loading ? 'Reading…' : workbooks.length ? 'Add files' : 'Open workbooks'}
           </button>
-          {workbook && <span className="file-name mono">{workbook.fileName}</span>}
+          {progress ? (
+            <span className="file-name mono">{progress}</span>
+          ) : (
+            workbooks.length === 1 && <span className="file-name mono">{workbooks[0].fileName}</span>
+          )}
         </div>
 
         {status && <div className={`status status-${status.tone}`}>{status.text}</div>}
@@ -194,6 +280,19 @@ export default function App() {
         <section className="grid-pane">
           {workbook && sheet ? (
             <>
+              <FileBar
+                workbooks={workbooks}
+                activeId={activeFileId}
+                failures={loadFailures}
+                resultsById={resultsById}
+                onSelect={selectFile}
+                onRemove={removeFile}
+                onDismissFailure={(name) =>
+                  setLoadFailures((prev) => prev.filter((f) => f.fileName !== name))
+                }
+                onClear={clearFiles}
+              />
+
               <div className="sheet-tabs">
                 {workbook.sheets.map((s) => (
                   <button
@@ -237,18 +336,23 @@ export default function App() {
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
                 e.preventDefault();
-                const f = e.dataTransfer.files?.[0];
-                if (f) void openFile(f);
+                void openFiles([...(e.dataTransfer.files ?? [])]);
               }}
             >
-              <h2>Drop a workbook here</h2>
+              <h2>Drop workbooks here</h2>
               <p>
-                .xlsx, .xlsm, .xls, .csv and .tsv are supported. Files are parsed entirely in your
-                browser — nothing is uploaded.
+                .xlsx, .xlsm, .xls, .csv and .tsv are supported. Drop several at once to run one
+                template across all of them. Files are parsed entirely in your browser — nothing is
+                uploaded.
               </p>
               <button className="btn" onClick={() => fileInput.current?.click()}>
-                Choose a file
+                Choose files
               </button>
+              {loadFailures.length > 0 && (
+                <p className="result-error">
+                  {loadFailures.map((f) => `${f.fileName}: ${f.error}`).join(' · ')}
+                </p>
+              )}
             </div>
           )}
         </section>
@@ -391,10 +495,12 @@ export default function App() {
             </div>
           ) : (
             <div className="pane">
-              {result ? (
+              {batchResults.length > 0 ? (
                 <ResultsPanel
-                  result={result}
+                  results={batchResults}
+                  activeResult={result}
                   flatten={template.flatten}
+                  stale={deferredTemplate !== template}
                   onFlattenChange={(flatten) =>
                     setTemplate((t) => ({ ...t, flatten, updatedAt: Date.now() }))
                   }

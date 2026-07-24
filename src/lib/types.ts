@@ -9,6 +9,8 @@ export interface SheetData {
 }
 
 export interface WorkbookData {
+  /** Stable per-load id: file names are not unique across a batch. */
+  id: string;
   fileName: string;
   sheets: SheetData[];
 }
