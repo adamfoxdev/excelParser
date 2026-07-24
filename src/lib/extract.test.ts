@@ -258,6 +258,7 @@ describe('output shapes', () => {
       id: 't',
       name: 'Invoice',
       description: '',
+      flatten: false,
       createdAt: 0,
       updatedAt: 0,
       fields: [

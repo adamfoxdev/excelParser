@@ -61,6 +61,11 @@ export interface Template {
   name: string;
   description: string;
   fields: Field[];
+  /**
+   * Present results and CSV as a single flat row — one column per field, with
+   * multi-row fields JSON-encoded into their cell.
+   */
+  flatten: boolean;
   createdAt: number;
   updatedAt: number;
 }

@@ -265,17 +265,23 @@ export function FieldEditor({
           <select
             className="inp"
             value={field.output}
-            onChange={(e) => set({ output: e.target.value as Field['output'] })}
+            onChange={(e) => {
+              // A header row only means anything for a table. Left set, it would
+              // silently swallow the first item of a list or blank out a value.
+              const output = e.target.value as Field['output'];
+              set({ output, headerRow: output === 'table' && field.headerRow });
+            }}
           >
             <option value="table">Table</option>
             <option value="list">List</option>
             <option value="value">Single value</option>
           </select>
         </label>
-        <label className="lbl chk">
+        <label className={`lbl chk ${field.output === 'table' ? '' : 'is-disabled'}`}>
           <input
             type="checkbox"
             checked={field.headerRow}
+            disabled={field.output !== 'table'}
             onChange={(e) => set({ headerRow: e.target.checked })}
           />
           First row is headers

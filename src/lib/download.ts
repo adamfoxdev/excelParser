@@ -1,4 +1,5 @@
 import type { CellValue, ExtractionResult, FieldResult } from './types';
+import { flattenResult } from './flatten';
 
 export function downloadFile(name: string, contents: string, mime: string): void {
   const url = URL.createObjectURL(new Blob([contents], { type: mime }));
@@ -30,6 +31,17 @@ export function resultToCsv(result: ExtractionResult): string {
     return `${heading}\r\n${body}`;
   });
   return blocks.join('\r\n\r\n');
+}
+
+/**
+ * One header row and one data row: every field becomes a column, and fields
+ * spanning multiple rows are JSON-encoded into their single cell.
+ */
+export function resultToFlatCsv(result: ExtractionResult): string {
+  const table = flattenResult(result);
+  return [table.headers.map(csvCell), ...table.rows.map((row) => row.map(csvCell))]
+    .map((row) => row.join(','))
+    .join('\r\n');
 }
 
 /** Field name → rows of objects (when headers exist) or arrays. */

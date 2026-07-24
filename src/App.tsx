@@ -392,7 +392,13 @@ export default function App() {
           ) : (
             <div className="pane">
               {result ? (
-                <ResultsPanel result={result} />
+                <ResultsPanel
+                  result={result}
+                  flatten={template.flatten}
+                  onFlattenChange={(flatten) =>
+                    setTemplate((t) => ({ ...t, flatten, updatedAt: Date.now() }))
+                  }
+                />
               ) : (
                 <p className="empty">Open a workbook to see extracted data.</p>
               )}

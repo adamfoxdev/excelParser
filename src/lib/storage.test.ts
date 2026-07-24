@@ -7,6 +7,7 @@ const template: Template = {
   id: 'orig-id',
   name: 'Invoice extract',
   description: 'Supplier invoices',
+  flatten: true,
   createdAt: 1700000000000,
   updatedAt: 1700000000000,
   fields: [
@@ -45,6 +46,11 @@ describe('template import/export', () => {
     expect(back.name).toBe(template.name);
     expect(back.fields.map((f) => f.selector)).toEqual(template.fields.map((f) => f.selector));
     expect(back.fields.map((f) => f.output)).toEqual(['table', 'value']);
+    expect(back.flatten).toBe(true);
+  });
+
+  it('defaults flatten to false for templates exported before the option existed', () => {
+    expect(deserializeTemplate('{"name":"x","fields":[]}').flatten).toBe(false);
   });
 
   it('assigns a new id so an import cannot overwrite an existing template', () => {

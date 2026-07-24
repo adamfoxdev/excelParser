@@ -59,6 +59,33 @@ sizing captures the whole line-items table however far down the sheet it has mov
 - **Single value** — the first non-blank cell. Use with a `+1` column offset to read the
   number sitting next to a label.
 
+"First row is headers" only applies to **Table**; switching a field to List or Single value
+clears it, since a header row would otherwise eat the first item of a list.
+
+### Flat table
+
+The Results tab toggles between **By field** — each field rendered as its own block — and
+**Flat table**, which collapses the whole extraction into one row: one column per field,
+with any field spanning multiple rows JSON-encoded into its single cell.
+
+| Line Items                                        | Invoice total | SKUs                    |
+| ------------------------------------------------- | ------------- | ----------------------- |
+| `[{"SKU":"A-1001","Qty":12}, {"SKU":"A-1002",...}]` | `231.66`      | `["A-1001","A-1002"]`   |
+
+- **Table** fields become a JSON array of objects, or arrays if the field has no headers.
+- **List** fields become a JSON array.
+- **Single value** fields stay bare scalars — no JSON.
+- Failed fields become an empty cell.
+
+The shape of a column is fixed by the field's output type, never by how much data a given
+file happened to hold: a one-row table is still `[{...}]` and an empty one is still `[]`. A
+column that were a bare number in one file and an array in the next would be unusable
+downstream. If you want a bare value in a column, set that field's output to **Single value**.
+
+In flat mode the CSV export switches to the same single-row shape (embedded JSON is
+quote-escaped, so it survives a CSV round trip). The JSON export is unaffected — it already
+nests properly. The toggle is saved with the template.
+
 ## Try it
 
 `samples/` holds two invoices with identical content at different vertical offsets:
@@ -79,6 +106,7 @@ src/
     range.ts       A1 notation <-> row-col indices
     workbook.ts    File -> dense cell matrices (SheetJS, loaded on demand)
     extract.ts     Selector resolution and extraction — the core
+    flatten.ts     Extraction -> single flat row, multi-row fields as JSON
     storage.ts     TemplateStore interface + IndexedDB implementation
     download.ts    JSON / CSV export
   components/

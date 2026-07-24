@@ -15,12 +15,20 @@ export interface TemplateStore {
 
 const store = createStore('excel-parser', 'templates');
 
+/** Fills in fields added after a template was written, so older saves stay usable. */
+function normalize(template: Template): Template {
+  return { ...template, flatten: template.flatten ?? false };
+}
+
 export const indexedDbStore: TemplateStore = {
   async list() {
     const all = (await values(store)) as Template[];
-    return all.sort((a, b) => b.updatedAt - a.updatedAt);
+    return all.map(normalize).sort((a, b) => b.updatedAt - a.updatedAt);
   },
-  get: (id) => get<Template>(id, store),
+  async get(id) {
+    const found = await get<Template>(id, store);
+    return found && normalize(found);
+  },
   save: (template) => set(template.id, template, store),
   remove: (id) => del(id, store),
 };
@@ -36,6 +44,7 @@ export function emptyTemplate(): Template {
     name: 'Untitled template',
     description: '',
     fields: [],
+    flatten: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -120,6 +129,7 @@ export function deserializeTemplate(json: string): Template {
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name : 'Imported template',
     description: typeof raw.description === 'string' ? raw.description : '',
     fields,
+    flatten: raw.flatten === true,
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
     updatedAt: now,
   };
