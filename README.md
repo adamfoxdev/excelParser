@@ -23,7 +23,7 @@ npm run dev
 
 ## How it works
 
-1. **Open workbooks** — `.xlsx`, `.xlsm`, `.xls`, `.csv`, `.tsv`. Drop one or many at once.
+1. **Open workbooks** — `.xlsx`, `.xlsm`, `.xls`, `.csv`, `.tsv`. Drop one, many, or a folder.
 2. **Select a range** — drag across cells, or click and shift-click to extend.
 3. **Add field from selection** — names itself from the label above the range where it can.
 4. **Save** the template. It persists across reloads and can be exported as JSON.
@@ -32,18 +32,39 @@ npm run dev
 
 ## Batch processing
 
-Drop several files and the template runs against all of them. The file bar above the grid
-switches which file the grid and the by-field view show; **Flat table** shows the whole batch
-at once, one row per file.
+Drop files — or a whole folder — and one template runs across all of them. The file bar above
+the grid switches which file the grid and by-field view show; **Flat table** shows the whole
+batch, one row per file.
 
-- One unreadable file does not sink the batch — it gets an *unreadable* chip with the parser
-  error on hover, and the rest still load.
+Dropping a folder walks it recursively (to 12 levels, capped at 2000 files). Anything that
+isn't a spreadsheet is skipped and counted, including the `~$…` lock files Excel scatters
+beside open workbooks. **Add folder** does the same through a picker.
+
+### Memory: files are not all held open
+
+Only the file you are looking at is parsed. The rest are kept as `File` handles, which are
+disk-backed and cost essentially nothing. **Run on all N** then streams the batch — parse a
+workbook, extract, discard it, move to the next — so peak memory is one workbook plus the
+extracted results, regardless of batch size. Measured over 40 files: heap moved 25.6 MB →
+25.9 MB across the whole run.
+
+Because files are no longer resident, a batch is an explicit action rather than something
+recomputed on every keystroke:
+
+- Editing a field re-extracts the **active file** immediately, so authoring stays live.
+- The batch bar reports `N of M files extracted`, and switches to *Template changed since the
+  last run* when you edit a selector afterwards. Renaming the template or flipping the
+  flat/by-field toggle does **not** invalidate a run — only changes that affect extraction do.
+- A run shows per-file progress and can be **cancelled**; whatever finished is kept. Cancelling
+  takes effect at the next file boundary, so the in-flight file is not wasted.
+- One unreadable file does not sink the batch: it is listed with its parser error and the run
+  continues.
 - Each file chip shows a red count of fields that failed to resolve in that file.
-- Exports cover every loaded file: the flat CSV gets one row each, and the JSON export an
-  entry per file.
-- Editing a field re-extracts the active file immediately; the full batch recomputes at lower
-  priority (`useDeferredValue`), so typing an anchor stays responsive with many files open. A
-  brief *updating…* tag appears while the batch catches up.
+- Exports cover every extracted file — one flat CSV row each, one JSON entry each.
+
+For very large batches the parse still runs on the main thread, one file at a time, yielding
+between files so progress paints. Moving parsing into a Web Worker would be the next step if
+a batch is big enough to make that jank noticeable.
 
 Batch is where anchored fields earn their keep. Running a template built on `invoice-a.xlsx`
 across all four samples, with the total field pinned to a **fixed** cell:
@@ -140,7 +161,9 @@ src/
   lib/
     types.ts       Template / field / selector shapes
     range.ts       A1 notation <-> row-col indices
-    workbook.ts    Files -> dense cell matrices (SheetJS, loaded on demand)
+    workbook.ts    One file -> dense cell matrices (SheetJS, loaded on demand)
+    files.ts       Collecting dropped files and walking dropped folders
+    batch.ts       Streaming run: parse -> extract -> discard, one file at a time
     extract.ts     Selector resolution and extraction — the core
     flatten.ts     Extractions -> one flat row per file, multi-row fields as JSON
     storage.ts     TemplateStore interface + IndexedDB implementation

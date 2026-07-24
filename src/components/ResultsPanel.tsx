@@ -1,6 +1,7 @@
 import type { ExtractionResult, FieldResult } from '../lib/types';
 import { downloadFile, resultToCsv, resultsToFlatCsv, resultsToJson, safeFileName } from '../lib/download';
 import { flattenResults, isJsonCell } from '../lib/flatten';
+import type { BatchFailure, BatchProgress } from '../lib/batch';
 
 const PREVIEW_ROWS = 50;
 
@@ -136,16 +137,85 @@ function FlatTableView({ results }: { results: ExtractionResult[] }) {
 }
 
 interface Props {
-  /** Every loaded file, extracted with the current template. */
+  /** A completed batch, or just the active file when no batch has run. */
   results: ExtractionResult[];
   /** The file shown in the grid — the one the by-field view details. */
   activeResult: ExtractionResult | null;
+  fileCount: number;
+  batchRan: boolean;
+  batchStale: boolean;
+  batchFailures: BatchFailure[];
+  progress: BatchProgress | null;
   flatten: boolean;
+  onRunBatch: () => void;
+  onCancelBatch: () => void;
   onFlattenChange: (flatten: boolean) => void;
-  stale: boolean;
 }
 
-export function ResultsPanel({ results, activeResult, flatten, onFlattenChange, stale }: Props) {
+function BatchBar({
+  fileCount,
+  batchRan,
+  batchStale,
+  extracted,
+  progress,
+  onRun,
+  onCancel,
+}: {
+  fileCount: number;
+  batchRan: boolean;
+  batchStale: boolean;
+  extracted: number;
+  progress: BatchProgress | null;
+  onRun: () => void;
+  onCancel: () => void;
+}) {
+  if (fileCount <= 1) return null;
+
+  if (progress) {
+    const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+    return (
+      <div className="batch-bar is-running">
+        <div className="batch-progress" style={{ width: `${pct}%` }} />
+        <span className="batch-text">
+          Extracting {progress.done + 1} of {progress.total}
+          {progress.fileName && <span className="dim"> · {progress.fileName}</span>}
+        </span>
+        <button className="btn-secondary" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`batch-bar ${batchStale || !batchRan ? 'needs-run' : ''}`}>
+      <span className="batch-text">
+        {!batchRan
+          ? `${fileCount} files loaded — only the open file is extracted so far`
+          : batchStale
+            ? `Template changed since the last run · showing ${extracted} file${extracted === 1 ? '' : 's'}`
+            : `${extracted} of ${fileCount} files extracted`}
+      </span>
+      <button className="btn" onClick={onRun}>
+        {batchRan ? 'Re-run batch' : `Run on all ${fileCount}`}
+      </button>
+    </div>
+  );
+}
+
+export function ResultsPanel({
+  results,
+  activeResult,
+  fileCount,
+  batchRan,
+  batchStale,
+  batchFailures,
+  progress,
+  flatten,
+  onRunBatch,
+  onCancelBatch,
+  onFlattenChange,
+}: Props) {
   const failedFiles = results.filter((r) => r.fields.some((f) => !f.ok)).length;
   const fieldCount = results[0]?.fields.length ?? 0;
   const templateName = results[0]?.templateName ?? 'extraction';
@@ -165,6 +235,34 @@ export function ResultsPanel({ results, activeResult, flatten, onFlattenChange, 
         </button>
       </div>
 
+      <BatchBar
+        fileCount={fileCount}
+        batchRan={batchRan}
+        batchStale={batchStale}
+        extracted={batchRan ? results.length : 0}
+        progress={progress}
+        onRun={onRunBatch}
+        onCancel={onCancelBatch}
+      />
+
+      {batchFailures.length > 0 && (
+        <div className="result-block is-error">
+          <div className="result-head">
+            <strong>{batchFailures.length} file(s) could not be read</strong>
+          </div>
+          <ul className="failure-list">
+            {batchFailures.slice(0, 10).map((f) => (
+              <li key={f.fileId}>
+                <span className="mono">{f.fileName}</span> — {f.error}
+              </li>
+            ))}
+          </ul>
+          {batchFailures.length > 10 && (
+            <p className="hint">+{batchFailures.length - 10} more</p>
+          )}
+        </div>
+      )}
+
       <div className="results-bar">
         <span>
           {results.length} file{results.length === 1 ? '' : 's'} · {fieldCount} field
@@ -174,7 +272,6 @@ export function ResultsPanel({ results, activeResult, flatten, onFlattenChange, 
               {failedFiles} file{failedFiles === 1 ? '' : 's'} with errors
             </span>
           )}
-          {stale && <span className="tag">updating…</span>}
         </span>
         <div className="results-actions">
           <button
@@ -207,10 +304,10 @@ export function ResultsPanel({ results, activeResult, flatten, onFlattenChange, 
         <FlatTableView results={results} />
       ) : (
         <>
-          {results.length > 1 && (
+          {fileCount > 1 && (
             <p className="hint">
               Showing <strong>{activeResult?.fileName}</strong> — pick another file above, or
-              switch to <strong>Flat table</strong> for all {results.length} at once.
+              switch to <strong>Flat table</strong> for the whole batch.
             </p>
           )}
           {activeResult?.fields.map((f) => <FieldBlock key={f.fieldId} field={f} />)}

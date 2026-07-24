@@ -1,10 +1,19 @@
-import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SheetGrid } from './components/SheetGrid';
 import { FieldEditor } from './components/FieldEditor';
 import { ResultsPanel } from './components/ResultsPanel';
 import { FileBar } from './components/FileBar';
-import { loadWorkbooks, type LoadFailure } from './lib/workbook';
-import { applyTemplate, applyTemplateToAll, describeSelector, resolveSelector } from './lib/extract';
+import { loadWorkbook } from './lib/workbook';
+import { applyTemplate, describeSelector, resolveSelector } from './lib/extract';
+import {
+  runBatch,
+  templateSignature,
+  toBatchFile,
+  type BatchFailure,
+  type BatchFile,
+  type BatchProgress,
+} from './lib/batch';
+import { collectFromList, describeCollection, filesFromDrop, type Collected } from './lib/files';
 import { encodeRange, type RangeRef } from './lib/range';
 import {
   deserializeTemplate,
@@ -14,7 +23,7 @@ import {
   serializeTemplate,
 } from './lib/storage';
 import { downloadFile, safeFileName } from './lib/download';
-import type { Field, Template, WorkbookData } from './lib/types';
+import type { ExtractionResult, Field, Template, WorkbookData } from './lib/types';
 import './App.css';
 
 interface Selection {
@@ -22,11 +31,23 @@ interface Selection {
   range: RangeRef;
 }
 
+/** A finished batch run, with the template it was produced from. */
+interface BatchState {
+  results: ExtractionResult[];
+  failures: BatchFailure[];
+  signature: string;
+  cancelled: boolean;
+}
+
 export default function App() {
-  const [workbooks, setWorkbooks] = useState<WorkbookData[]>([]);
+  const [files, setFiles] = useState<BatchFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
-  const [loadFailures, setLoadFailures] = useState<LoadFailure[]>([]);
-  const [progress, setProgress] = useState<string | null>(null);
+  /** Only the file on screen is parsed; the rest stay as File handles. */
+  const [workbook, setWorkbook] = useState<WorkbookData | null>(null);
+  const [workbookError, setWorkbookError] = useState<string | null>(null);
+  const [batch, setBatch] = useState<BatchState | null>(null);
+  const [progress, setProgress] = useState<BatchProgress | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [activeSheet, setActiveSheet] = useState('');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [template, setTemplate] = useState<Template>(emptyTemplate);
@@ -37,6 +58,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   const fileInput = useRef<HTMLInputElement>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
 
   const refreshSaved = useCallback(async () => {
@@ -53,92 +75,139 @@ export default function App() {
     return () => clearTimeout(t);
   }, [status]);
 
-  const workbook = useMemo(
-    () => workbooks.find((w) => w.id === activeFileId) ?? null,
-    [workbooks, activeFileId],
-  );
-
   const sheet = useMemo(
     () => workbook?.sheets.find((s) => s.name === activeSheet) ?? null,
     [workbook, activeSheet],
   );
 
-  const openFiles = async (files: File[]) => {
-    if (files.length === 0) return;
+  // Parse whichever file is active, and only that one. Switching files releases
+  // the previous workbook, so memory tracks the largest single file rather than
+  // the size of the batch.
+  useEffect(() => {
+    const entry = files.find((f) => f.id === activeFileId);
+    if (!entry) {
+      setWorkbook(null);
+      setWorkbookError(null);
+      return;
+    }
+
+    let cancelled = false;
     setLoading(true);
-    setProgress(files.length > 1 ? `Reading 1 of ${files.length}…` : null);
+    setWorkbookError(null);
 
-    const { loaded, failed } = await loadWorkbooks(files, (done, total, fileName) => {
-      if (total > 1 && done < total) setProgress(`Reading ${done + 1} of ${total} — ${fileName}`);
-    });
+    loadWorkbook(entry.file)
+      .then((wb) => {
+        if (cancelled) return;
+        setWorkbook(wb);
+        // Hold the sheet name across files where it exists — templates are
+        // usually built against a consistently named sheet.
+        setActiveSheet((current) =>
+          wb.sheets.some((s) => s.name === current) ? current : wb.sheets[0].name,
+        );
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setWorkbook(null);
+        setWorkbookError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
-    setProgress(null);
-    setLoading(false);
-    setLoadFailures((prev) => [...prev.filter((f) => !failed.some((n) => n.fileName === f.fileName)), ...failed]);
+    return () => {
+      cancelled = true;
+    };
+  }, [files, activeFileId]);
 
-    if (loaded.length === 0) {
+  const addFiles = (collected: Collected) => {
+    if (collected.files.length === 0) {
       setStatus({
-        text:
-          failed.length === 1
-            ? `Could not read ${failed[0].fileName}: ${failed[0].error}`
-            : `None of those ${failed.length} files could be read.`,
+        text: describeCollection(collected) ?? 'No spreadsheet files in that drop.',
         tone: 'error',
       });
       return;
     }
 
-    // Keep the file already in the grid; only jump to a new one on a fresh start.
-    setWorkbooks((prev) => {
-      const next = [...prev, ...loaded];
+    const added = collected.files.map(toBatchFile);
+    setFiles((prev) => {
       if (prev.length === 0) {
-        setActiveFileId(loaded[0].id);
-        setActiveSheet(loaded[0].sheets[0].name);
+        setActiveFileId(added[0].id);
         setSelection(null);
       }
-      return next;
+      return [...prev, ...added];
     });
 
-    const loadedText =
-      loaded.length === 1
-        ? `Loaded ${loaded[0].fileName} — ${loaded[0].sheets.length} sheet(s)`
-        : `Loaded ${loaded.length} files`;
-
+    const note = describeCollection(collected);
     setStatus({
-      text: failed.length ? `${loadedText} · ${failed.length} unreadable` : loadedText,
-      tone: failed.length ? 'error' : 'ok',
+      text: `Added ${added.length} file${added.length === 1 ? '' : 's'}${note ? ` · ${note}` : ''}`,
+      tone: collected.truncated ? 'error' : 'ok',
     });
   };
 
   const removeFile = (id: string) => {
-    setWorkbooks((prev) => {
-      const next = prev.filter((w) => w.id !== id);
+    setFiles((prev) => {
+      const next = prev.filter((f) => f.id !== id);
       if (id === activeFileId) {
-        const fallback = next[0] ?? null;
-        setActiveFileId(fallback?.id ?? null);
-        setActiveSheet(fallback?.sheets[0].name ?? '');
+        setActiveFileId(next[0]?.id ?? null);
         setSelection(null);
       }
       return next;
     });
+    setBatch((prev) =>
+      prev
+        ? {
+            ...prev,
+            results: prev.results.filter(
+              (r) => r.fileName !== files.find((f) => f.id === id)?.name,
+            ),
+            failures: prev.failures.filter((f) => f.fileId !== id),
+          }
+        : prev,
+    );
   };
 
   const selectFile = (id: string) => {
-    const wb = workbooks.find((w) => w.id === id);
-    if (!wb) return;
+    if (!files.some((f) => f.id === id)) return;
     setActiveFileId(id);
-    // Stay on the same sheet name across files where it exists — templates are
-    // usually built against a consistent sheet.
-    if (!wb.sheets.some((s) => s.name === activeSheet)) setActiveSheet(wb.sheets[0].name);
     setSelection(null);
   };
 
   const clearFiles = () => {
-    setWorkbooks([]);
+    abortRef.current?.abort();
+    setFiles([]);
     setActiveFileId(null);
     setActiveSheet('');
     setSelection(null);
-    setLoadFailures([]);
+    setBatch(null);
+    setProgress(null);
   };
+
+  const startBatch = async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const signature = templateSignature(template);
+
+    setProgress({ done: 0, total: files.length, fileName: '' });
+    const outcome = await runBatch(files, template, {
+      signal: controller.signal,
+      onProgress: setProgress,
+    });
+    setProgress(null);
+    if (controller !== abortRef.current) return; // superseded by a newer run
+
+    setBatch({ ...outcome, signature });
+    setStatus({
+      text: outcome.cancelled
+        ? `Stopped after ${outcome.results.length} of ${files.length} files`
+        : `Extracted ${outcome.results.length} file${outcome.results.length === 1 ? '' : 's'}${
+            outcome.failures.length ? ` · ${outcome.failures.length} unreadable` : ''
+          }`,
+      tone: outcome.failures.length || outcome.cancelled ? 'error' : 'ok',
+    });
+  };
+
+  const cancelBatch = () => abortRef.current?.abort();
 
   const touch = (fields: Field[]) => setTemplate((t) => ({ ...t, fields, updatedAt: Date.now() }));
 
@@ -208,24 +277,36 @@ export default function App() {
     }
   };
 
-  // The active file re-extracts immediately so the grid and by-field view track
-  // edits. The whole batch is deferred: re-running every file on each keystroke
-  // in the field editor would make typing crawl once a few workbooks are open.
+  // The active file re-extracts on every edit so authoring stays live. The rest
+  // of the batch is only touched by an explicit run — re-parsing every file on
+  // each keystroke would be unusable, and defeats the point of not holding them.
   const result = useMemo(
     () => (workbook ? applyTemplate(workbook, template) : null),
     [workbook, template],
   );
 
-  const deferredTemplate = useDeferredValue(template);
-  const batchResults = useMemo(
-    () => applyTemplateToAll(workbooks, deferredTemplate),
-    [workbooks, deferredTemplate],
+  const batchStale = batch !== null && batch.signature !== templateSignature(template);
+
+  /** What the Results tab shows: a completed batch, else the live active file. */
+  const displayedResults = useMemo(
+    () => (batch ? batch.results : result ? [result] : []),
+    [batch, result],
   );
 
-  const resultsById = useMemo(
-    () => new Map(workbooks.map((wb, i) => [wb.id, batchResults[i]])),
-    [workbooks, batchResults],
+  const resultsByName = useMemo(
+    () => new Map((batch?.results ?? []).map((r) => [r.fileName, r])),
+    [batch],
   );
+
+  const resultsById = useMemo(() => {
+    const map = new Map<string, ExtractionResult>();
+    for (const entry of files) {
+      const found =
+        entry.id === activeFileId && result ? result : resultsByName.get(entry.name);
+      if (found) map.set(entry.id, found);
+    }
+    return map;
+  }, [files, activeFileId, result, resultsByName]);
 
   const activeField = template.fields.find((f) => f.id === activeFieldId) ?? null;
 
@@ -259,18 +340,28 @@ export default function App() {
             multiple
             hidden
             onChange={(e) => {
-              void openFiles([...(e.target.files ?? [])]);
+              addFiles(collectFromList(e.target.files ?? []));
               e.target.value = '';
             }}
           />
-          <button className="btn" onClick={() => fileInput.current?.click()} disabled={loading}>
-            {loading ? 'Reading…' : workbooks.length ? 'Add files' : 'Open workbooks'}
+          <input
+            ref={folderInput}
+            type="file"
+            hidden
+            // Not in React's typings; the directory picker needs the raw attributes.
+            {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+            onChange={(e) => {
+              addFiles(collectFromList(e.target.files ?? []));
+              e.target.value = '';
+            }}
+          />
+          <button className="btn" onClick={() => fileInput.current?.click()}>
+            {files.length ? 'Add files' : 'Open workbooks'}
           </button>
-          {progress ? (
-            <span className="file-name mono">{progress}</span>
-          ) : (
-            workbooks.length === 1 && <span className="file-name mono">{workbooks[0].fileName}</span>
-          )}
+          <button className="btn-secondary" onClick={() => folderInput.current?.click()}>
+            Add folder
+          </button>
+          {files.length === 1 && <span className="file-name mono">{files[0].name}</span>}
         </div>
 
         {status && <div className={`status status-${status.tone}`}>{status.text}</div>}
@@ -278,23 +369,34 @@ export default function App() {
 
       <main className="layout">
         <section className="grid-pane">
-          {workbook && sheet ? (
+          {files.length > 0 ? (
             <>
               <FileBar
-                workbooks={workbooks}
+                files={files}
                 activeId={activeFileId}
-                failures={loadFailures}
+                failures={batch?.failures ?? []}
                 resultsById={resultsById}
                 onSelect={selectFile}
                 onRemove={removeFile}
-                onDismissFailure={(name) =>
-                  setLoadFailures((prev) => prev.filter((f) => f.fileName !== name))
-                }
                 onClear={clearFiles}
               />
 
+              {!sheet ? (
+                <div className="dropzone">
+                  {loading ? (
+                    <h2>Reading {files.find((f) => f.id === activeFileId)?.name}…</h2>
+                  ) : (
+                    <>
+                      <h2>Could not read this file</h2>
+                      <p className="result-error">{workbookError}</p>
+                      <p>Pick another file above, or remove this one.</p>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <>
               <div className="sheet-tabs">
-                {workbook.sheets.map((s) => (
+                {workbook!.sheets.map((s) => (
                   <button
                     key={s.name}
                     className={s.name === activeSheet ? 'is-on' : ''}
@@ -329,6 +431,8 @@ export default function App() {
                   + Add field from selection
                 </button>
               </div>
+                </>
+              )}
             </>
           ) : (
             <div
@@ -336,23 +440,23 @@ export default function App() {
               onDragOver={(e) => e.preventDefault()}
               onDrop={(e) => {
                 e.preventDefault();
-                void openFiles([...(e.dataTransfer.files ?? [])]);
+                void filesFromDrop(e.dataTransfer).then(addFiles);
               }}
             >
-              <h2>Drop workbooks here</h2>
+              <h2>Drop workbooks or a folder here</h2>
               <p>
-                .xlsx, .xlsm, .xls, .csv and .tsv are supported. Drop several at once to run one
-                template across all of them. Files are parsed entirely in your browser — nothing is
-                uploaded.
+                .xlsx, .xlsm, .xls, .csv and .tsv are supported. Drop a whole folder to run one
+                template across everything in it — subfolders included. Files are parsed entirely
+                in your browser, one at a time; nothing is uploaded.
               </p>
-              <button className="btn" onClick={() => fileInput.current?.click()}>
-                Choose files
-              </button>
-              {loadFailures.length > 0 && (
-                <p className="result-error">
-                  {loadFailures.map((f) => `${f.fileName}: ${f.error}`).join(' · ')}
-                </p>
-              )}
+              <div className="btn-row">
+                <button className="btn" onClick={() => fileInput.current?.click()}>
+                  Choose files
+                </button>
+                <button className="btn-secondary" onClick={() => folderInput.current?.click()}>
+                  Choose folder
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -495,12 +599,18 @@ export default function App() {
             </div>
           ) : (
             <div className="pane">
-              {batchResults.length > 0 ? (
+              {files.length > 0 ? (
                 <ResultsPanel
-                  results={batchResults}
+                  results={displayedResults}
                   activeResult={result}
+                  fileCount={files.length}
+                  batchRan={batch !== null}
+                  batchStale={batchStale}
+                  batchFailures={batch?.failures ?? []}
+                  progress={progress}
                   flatten={template.flatten}
-                  stale={deferredTemplate !== template}
+                  onRunBatch={() => void startBatch()}
+                  onCancelBatch={cancelBatch}
                   onFlattenChange={(flatten) =>
                     setTemplate((t) => ({ ...t, flatten, updatedAt: Date.now() }))
                   }

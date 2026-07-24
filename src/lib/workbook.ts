@@ -59,40 +59,6 @@ export async function loadWorkbook(file: File): Promise<WorkbookData> {
   return { id: crypto.randomUUID(), fileName: file.name, sheets };
 }
 
-export interface LoadFailure {
-  fileName: string;
-  error: string;
-}
-
-export interface BatchLoad {
-  loaded: WorkbookData[];
-  failed: LoadFailure[];
-}
-
-/**
- * Loads a batch one file at a time, reporting each file's outcome separately —
- * one unreadable workbook must not discard the rest of the batch. `onProgress`
- * fires after each file so the UI can show which one is being read.
- */
-export async function loadWorkbooks(
-  files: File[],
-  onProgress?: (done: number, total: number, fileName: string) => void,
-): Promise<BatchLoad> {
-  const loaded: WorkbookData[] = [];
-  const failed: LoadFailure[] = [];
-
-  for (const [i, file] of files.entries()) {
-    onProgress?.(i, files.length, file.name);
-    try {
-      loaded.push(await loadWorkbook(file));
-    } catch (err) {
-      failed.push({ fileName: file.name, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
-
-  onProgress?.(files.length, files.length, '');
-  return { loaded, failed };
-}
 
 export function getSheet(wb: WorkbookData, name: string): SheetData | undefined {
   return wb.sheets.find((s) => s.name === name);
