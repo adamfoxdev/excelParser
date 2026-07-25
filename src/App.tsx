@@ -609,11 +609,13 @@ export default function App() {
                   batchFailures={batch?.failures ?? []}
                   progress={progress}
                   flatten={template.flatten}
+                  sql={template.sql}
                   onRunBatch={() => void startBatch()}
                   onCancelBatch={cancelBatch}
                   onFlattenChange={(flatten) =>
                     setTemplate((t) => ({ ...t, flatten, updatedAt: Date.now() }))
                   }
+                  onSqlChange={(sql) => setTemplate((t) => ({ ...t, sql, updatedAt: Date.now() }))}
                 />
               ) : (
                 <p className="empty">Open a workbook to see extracted data.</p>

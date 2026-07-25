@@ -1,4 +1,5 @@
-import type { ExtractionResult, FieldResult } from '../lib/types';
+import type { ExtractionResult, FieldResult, SqlTarget } from '../lib/types';
+import { buildSqlScript, type SqlMode } from '../lib/sql';
 import { downloadFile, resultToCsv, resultsToFlatCsv, resultsToJson, safeFileName } from '../lib/download';
 import { flattenResults, isJsonCell } from '../lib/flatten';
 import type { BatchFailure, BatchProgress } from '../lib/batch';
@@ -147,9 +148,58 @@ interface Props {
   batchFailures: BatchFailure[];
   progress: BatchProgress | null;
   flatten: boolean;
+  sql: SqlTarget;
   onRunBatch: () => void;
   onCancelBatch: () => void;
   onFlattenChange: (flatten: boolean) => void;
+  onSqlChange: (sql: SqlTarget) => void;
+}
+
+function SqlOptions({
+  sql,
+  mode,
+  tableCount,
+  onChange,
+}: {
+  sql: SqlTarget;
+  mode: SqlMode;
+  tableCount: number;
+  onChange: (sql: SqlTarget) => void;
+}) {
+  return (
+    <div className="sql-options">
+      <label className="lbl">
+        Schema
+        <input
+          className="inp"
+          value={sql.schema}
+          onChange={(e) => onChange({ ...sql, schema: e.target.value })}
+        />
+      </label>
+      <label className="lbl">
+        Table
+        <input
+          className="inp"
+          value={sql.table}
+          onChange={(e) => onChange({ ...sql, table: e.target.value })}
+        />
+      </label>
+      <label className="lbl chk">
+        <input
+          type="checkbox"
+          checked={sql.dropExisting}
+          onChange={(e) => onChange({ ...sql, dropExisting: e.target.checked })}
+        />
+        Drop if exists
+      </label>
+      <p className="hint sql-hint">
+        {mode === 'flat'
+          ? `One table (${sql.schema}.${sql.table}) — a row per file, multi-row fields as JSON.`
+          : `${tableCount} table${tableCount === 1 ? '' : 's'} keyed by SourceFile.`}{' '}
+        Same script for SQL Server and LocalDB.
+      </p>
+    </div>
+  );
 }
 
 function BatchBar({
@@ -212,12 +262,19 @@ export function ResultsPanel({
   batchFailures,
   progress,
   flatten,
+  sql,
   onRunBatch,
   onCancelBatch,
   onFlattenChange,
+  onSqlChange,
 }: Props) {
   const failedFiles = results.filter((r) => r.fields.some((f) => !f.ok)).length;
   const fieldCount = results[0]?.fields.length ?? 0;
+  // The SQL shape follows the view toggle, exactly as the CSV export does.
+  const sqlMode: SqlMode = flatten ? 'flat' : 'normalized';
+  const sqlTableCount =
+    (results[0]?.fields.some((f) => f.output === 'value') ? 1 : 0) +
+    (results[0]?.fields.filter((f) => f.output !== 'value').length ?? 0);
   const templateName = results[0]?.templateName ?? 'extraction';
   const base =
     results.length === 1
@@ -295,8 +352,30 @@ export function ResultsPanel({
           >
             {flatten ? 'Export flat CSV' : 'Export CSV'}
           </button>
+          <button
+            className="btn-secondary"
+            disabled={fieldCount === 0}
+            onClick={() =>
+              downloadFile(
+                `${base}.sql`,
+                buildSqlScript(results, { ...sql, mode: sqlMode }),
+                'application/sql',
+              )
+            }
+          >
+            Export SQL
+          </button>
         </div>
       </div>
+
+      {fieldCount > 0 && (
+        <SqlOptions
+          sql={sql}
+          mode={sqlMode}
+          tableCount={sqlTableCount}
+          onChange={onSqlChange}
+        />
+      )}
 
       {fieldCount === 0 ? (
         <p className="empty">Add a field to see extracted data here.</p>

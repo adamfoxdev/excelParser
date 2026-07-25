@@ -68,8 +68,16 @@ export interface Template {
    * multi-row fields JSON-encoded into their cell.
    */
   flatten: boolean;
+  /** Target for the generated T-SQL load script. */
+  sql: SqlTarget;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface SqlTarget {
+  schema: string;
+  table: string;
+  dropExisting: boolean;
 }
 
 export interface FieldResult {

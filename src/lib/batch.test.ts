@@ -27,6 +27,7 @@ const template: Template = {
   name: 'Invoice',
   description: '',
   flatten: true,
+  sql: { schema: 'dbo', table: 'Extraction', dropExisting: true },
   createdAt: 0,
   updatedAt: 0,
   fields: [

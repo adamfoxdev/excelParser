@@ -1,6 +1,12 @@
 import { createStore, del, get, set, values } from 'idb-keyval';
-import type { Field, Selector, Template } from './types';
+import type { Field, Selector, SqlTarget, Template } from './types';
 import { ANY_SHEET } from './types';
+
+export const DEFAULT_SQL_TARGET: SqlTarget = {
+  schema: 'dbo',
+  table: 'Extraction',
+  dropExisting: true,
+};
 
 /**
  * Templates live behind this interface so a server-backed store can replace the
@@ -17,7 +23,11 @@ const store = createStore('excel-parser', 'templates');
 
 /** Fills in fields added after a template was written, so older saves stay usable. */
 function normalize(template: Template): Template {
-  return { ...template, flatten: template.flatten ?? false };
+  return {
+    ...template,
+    flatten: template.flatten ?? false,
+    sql: { ...DEFAULT_SQL_TARGET, ...(template.sql ?? {}) },
+  };
 }
 
 export const indexedDbStore: TemplateStore = {
@@ -45,6 +55,7 @@ export function emptyTemplate(): Template {
     description: '',
     fields: [],
     flatten: false,
+    sql: { ...DEFAULT_SQL_TARGET },
     createdAt: now,
     updatedAt: now,
   };
@@ -90,6 +101,16 @@ function parseSelector(raw: unknown): Selector {
   throw new Error(`unknown selector kind "${String(s.kind)}"`);
 }
 
+function parseSqlTarget(raw: unknown): SqlTarget {
+  if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_SQL_TARGET };
+  const s = raw as Record<string, unknown>;
+  return {
+    schema: typeof s.schema === 'string' && s.schema.trim() ? s.schema : DEFAULT_SQL_TARGET.schema,
+    table: typeof s.table === 'string' && s.table.trim() ? s.table : DEFAULT_SQL_TARGET.table,
+    dropExisting: s.dropExisting !== false,
+  };
+}
+
 /**
  * Validates an imported template. Imported JSON is untrusted input — a bad file
  * should surface a readable error, not corrupt the template list.
@@ -130,6 +151,7 @@ export function deserializeTemplate(json: string): Template {
     description: typeof raw.description === 'string' ? raw.description : '',
     fields,
     flatten: raw.flatten === true,
+    sql: parseSqlTarget(raw.sql),
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : now,
     updatedAt: now,
   };

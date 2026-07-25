@@ -28,7 +28,7 @@ npm run dev
 3. **Add field from selection** — names itself from the label above the range where it can.
 4. **Save** the template. It persists across reloads and can be exported as JSON.
 5. **Open more files, load the template** — the Results tab shows what it extracted from
-   every one of them, exportable as JSON or CSV.
+   every one of them, exportable as JSON, CSV, or a T-SQL load script.
 
 ## Batch processing
 
@@ -132,6 +132,52 @@ file happened to hold: a one-row table is still `[{...}]` and an empty one is st
 column that were a bare number in one file and an array in the next would be unusable
 downstream. If you want a bare value in a column, set that field's output to **Single value**.
 
+## SQL Server / LocalDB export
+
+**Export SQL** generates a T-SQL load script. The dialect is identical for SQL Server and
+SQL Server Express LocalDB — only the server differs, and the generated script says so in its
+header:
+
+```bash
+sqlcmd -S "(localdb)\MSSQLLocalDB" -d YourDatabase -i extraction.sql
+```
+
+The script has no live connection to make: a browser page cannot open a TDS socket, so the app
+produces the script and `sqlcmd` (or SSMS) applies it. Set the target **schema** and **table**
+next to the export buttons; both are saved with the template.
+
+The shape follows the view toggle, exactly as the CSV export does:
+
+- **Flat table** → one table, a row per file. Multi-row fields land in `NVARCHAR(MAX)` columns
+  carrying JSON, with a `CHECK (ISJSON(col) = 1)` constraint, so `OPENJSON` can shred them:
+
+  ```sql
+  SELECT e.[File], j.SKU, j.Qty
+  FROM dbo.Extraction e
+  CROSS APPLY OPENJSON(e.[Line Items]) WITH (SKU NVARCHAR(50), Qty INT) j;
+  ```
+
+- **By field** → a relational shape. Each table field becomes its own table keyed by
+  `SourceFile`, each list field a table of `(SourceFile, Position, Value)`, and all single-value
+  fields collapse into one row-per-file table.
+
+Details that matter when this hits a real server:
+
+- **Identifiers are bracket-quoted** and a `]` inside a spreadsheet header is doubled, so a
+  header like `x]; DROP TABLE Users --` becomes a harmless column name. String literals are
+  `N'…'` with `'` doubled.
+- **Fractional columns are `DECIMAL`, not `FLOAT`.** Spreadsheet decimals are usually money, and
+  FLOAT is binary — a total of `128.8` reads back as `128.80000000000001`. Scale and precision
+  carry headroom so a later file with a longer value still loads.
+- **Inserts are chunked at 1000 rows**, which is SQL Server's hard cap on row constructors in a
+  single `INSERT … VALUES`.
+- Types are inferred per column: `BIT`, `INT`/`BIGINT`, `DECIMAL`, `DATE` (only for unambiguous
+  `YYYY-MM-DD`, never a locale-dependent format), else sized `NVARCHAR`.
+- Duplicate headers are disambiguated (`Total`, `Total_2`), blank ones become `Column`, and
+  names are truncated to the 128-char `sysname` limit.
+- `DROP TABLE IF EXISTS` is emitted by default so the script is re-runnable; uncheck **Drop if
+  exists** to append to existing tables instead.
+
 In flat mode the CSV export switches to the same shape (embedded JSON is quote-escaped, so it
 survives a CSV round trip); in by-field mode it exports the active file as labelled blocks.
 The JSON export always nests under a `files` array — one entry or twenty, a consumer never has
@@ -168,6 +214,7 @@ src/
     flatten.ts     Extractions -> one flat row per file, multi-row fields as JSON
     storage.ts     TemplateStore interface + IndexedDB implementation
     download.ts    JSON / CSV export
+    sql.ts         T-SQL script generation for SQL Server and LocalDB
   components/
     SheetGrid.tsx  Virtualised grid with drag selection
     FileBar.tsx    Batch file chips: switch, remove, per-file error counts

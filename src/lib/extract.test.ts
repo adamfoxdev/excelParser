@@ -267,6 +267,7 @@ describe('output shapes', () => {
       name: 'Invoice',
       description: '',
       flatten: true,
+      sql: { schema: 'dbo', table: 'Extraction', dropExisting: true },
       createdAt: 0,
       updatedAt: 0,
       fields: [
@@ -311,6 +312,7 @@ describe('output shapes', () => {
       name: 'T',
       description: '',
       flatten: false,
+      sql: { schema: 'dbo', table: 'Extraction', dropExisting: true },
       createdAt: 0,
       updatedAt: 0,
       fields: [
@@ -328,6 +330,7 @@ describe('output shapes', () => {
       name: 'Invoice',
       description: '',
       flatten: false,
+      sql: { schema: 'dbo', table: 'Extraction', dropExisting: true },
       createdAt: 0,
       updatedAt: 0,
       fields: [
